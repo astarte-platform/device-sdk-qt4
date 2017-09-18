@@ -1,0 +1,12 @@
+#ifndef QT4SDK_GLOBAL_H
+#define QT4SDK_GLOBAL_H
+
+#include <QtCore/qglobal.h>
+
+#if defined(QT4SDK_LIBRARY)
+#  define ASTARTEQT4SDKSHARED_EXPORT Q_DECL_EXPORT
+#else
+#  define ASTARTEQT4SDKSHARED_EXPORT Q_DECL_IMPORT
+#endif
+
+#endif // QT4SDK_GLOBAL_H
