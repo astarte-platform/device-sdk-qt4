@@ -19,7 +19,10 @@
 #include "httpendpoint.h"
 #include "httpendpoint_p.h"
 
+#include "astartepairoperation.h"
 #include "crypto.h"
+#include "credentialssecretprovider.h"
+#include "defaultcredentialssecretprovider.h"
 #include "verifycertificateoperation.h"
 #include "mqttclientwrapper.h"
 
@@ -48,177 +51,14 @@
 
 namespace Astarte {
 
-PairOperation::PairOperation(HTTPEndpoint *parent)
-    : Hemera::Operation(parent)
-    , m_endpoint(parent)
-{
-}
-
-PairOperation::~PairOperation()
-{
-}
-
-void PairOperation::startImpl()
-{
-    // Before anything else, we need to check if we have an available keystore.
-    if (!Crypto::instance()->isKeyStoreAvailable()) {
-        // Let's build one.
-        Hemera::Operation *op = Crypto::instance()->generateAstarteKeyStore();
-        connect(op, SIGNAL(finished(Hemera::Operation*)), this, SLOT(onGenerationFinished(Hemera::Operation*)));
-    } else {
-        // Let's just go
-        initiatePairing();
-    }
-}
-
-void PairOperation::onGenerationFinished(Hemera::Operation *op)
-{
-    if (op->isError()) {
-        // That's ugly.
-        setFinishedWithError(op->errorName(), op->errorMessage());
-        return;
-    }
-
-    initiatePairing();
-}
-
-void PairOperation::initiatePairing()
-{
-    // FIXME: This should be done using Global configuration!!
-    QSettings settings(QString("%1/endpoint_crypto.conf").arg(m_endpoint->pathToAstarteEndpointConfiguration(m_endpoint->d_func()->endpointName)),
-                       QSettings::IniFormat);
-    if (settings.value(QLatin1String("apiKey")).toString().isEmpty()) {
-        performFakeAgentPairing();
-    } else {
-        performPairing();
-    }
-}
-
-void PairOperation::performFakeAgentPairing()
-{
-    qWarning() << "Fake agent pairing!";
-    QString jsonDocument = QString("{\"hwId\":\"%1\"}").arg(QString(m_endpoint->d_func()->hardwareId));
-
-    QNetworkReply *r = m_endpoint->sendRequest(QLatin1String("/devices/apikeysFromDevice"), jsonDocument.toUtf8(), Crypto::CustomerAuthenticationDomain);
-
-    qDebug() << "I'm sending: " << jsonDocument;
-
-    connect(r, SIGNAL(finished()), this, SLOT(onDeviceIDPayloadFinished()));
-}
-
-void PairOperation::onDeviceIDPayloadFinished()
-{
-    QNetworkReply *r = qobject_cast<QNetworkReply*>(sender());
-    if (r->error() != QNetworkReply::NoError) {
-        qWarning() << "Pairing error! Error: " << r->error();
-        setFinishedWithError("Hemera::Literals::literal(Hemera::Literals::Errors::failedRequest())", r->errorString());
-        r->deleteLater();
-        return;
-    }
-
-    rapidjson::Document doc;
-    doc.Parse(r->readAll());
-    r->deleteLater();
-    qDebug() << "Got the ok!";
-    if (!doc.IsObject()) {
-        qWarning() << "Parsing pairing result error!";
-        setFinishedWithError("Hemera::Literals::literal(Hemera::Literals::Errors::badRequest())", QLatin1String("Parsing pairing result error!"));
-        return;
-    }
-
-    qDebug() << "Payload is ";
-
-    if (!doc.HasMember("apiKey")) {
-        qWarning() << "Missing apiKey in the pairing routine!";
-        setFinishedWithError("Hemera::Literals::literal(Hemera::Literals::Errors::badRequest())",
-                             QLatin1String("Missing apiKey in the pairing routine!"));
-        return;
-    }
-
-    // Ok, we need to write the files now.
-    {
-        QSettings settings(QString("%1/endpoint_crypto.conf").arg(m_endpoint->pathToAstarteEndpointConfiguration(m_endpoint->d_func()->endpointName)),
-                           QSettings::IniFormat);
-        settings.setValue(QLatin1String("apiKey"), doc["apiKey"].GetString());
-    }
-
-    // That's all, folks!
-    performPairing();
-}
-
-void PairOperation::performPairing()
-{
-    QFile csr(Crypto::instance()->pathToCertificateRequest());
-    if (!csr.open(QIODevice::ReadOnly)) {
-        qWarning() << "Could not open CSR for reading! Aborting.";
-        setFinishedWithError("Hemera::Literals::literal(Hemera::Literals::Errors::notFound())", QLatin1String("Could not open CSR for reading! Aborting."));
-    }
-
-    QByteArray deviceIDPayload = csr.readAll();
-    QNetworkReply *r = m_endpoint->sendRequest(QLatin1String("/pairing"), deviceIDPayload, Crypto::DeviceAuthenticationDomain);
-
-    qDebug() << "I'm sending: " << deviceIDPayload.constData();
-
-    connect(r, SIGNAL(finished()), this, SLOT(onPairingReply()));
-}
-
-void PairOperation::onPairingReply()
-{
-    QNetworkReply *r = qobject_cast<QNetworkReply*>(sender());
-    if (r->error() != QNetworkReply::NoError) {
-        qWarning() << "Pairing error!";
-        setFinishedWithError("Hemera::Literals::literal(Hemera::Literals::Errors::failedRequest())", r->errorString());
-        r->deleteLater();
-        return;
-    }
-
-    rapidjson::Document doc;
-    doc.Parse(r->readAll());
-    r->deleteLater();
-    qDebug() << "Got the ok!";
-    if (!doc.IsObject()) {
-        qWarning() << "Parsing pairing result error!";
-        setFinishedWithError("Hemera::Literals::literal(Hemera::Literals::Errors::badRequest())", QLatin1String("Parsing pairing result error!"));
-        return;
-    }
-
-    qDebug() << "Payload is ";
-
-    if (!doc.HasMember("clientCrt")) {
-        qWarning() << "Missing certificate in the pairing routine!";
-        setFinishedWithError("Hemera::Literals::literal(Hemera::Literals::Errors::badRequest())", QLatin1String("Missing certificate in the pairing routine!"));
-        return;
-    }
-
-    // Ok, we need to write the files now.
-    {
-        QFile generatedCertificate(QString("%1/mqtt_broker.crt").arg(m_endpoint->pathToAstarteEndpointConfiguration(m_endpoint->d_func()->endpointName)));
-        if (!generatedCertificate.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            qWarning() << "Could not write certificate!";
-            setFinishedWithError("Hemera::Literals::literal(Hemera::Literals::Errors::badRequest())", generatedCertificate.errorString());
-            return;
-        }
-        generatedCertificate.write(doc["clientCrt"].GetString());
-        generatedCertificate.flush();
-        generatedCertificate.close();
-    }
-    {
-        QSettings settings(QString("%1/mqtt_broker.conf").arg(m_endpoint->pathToAstarteEndpointConfiguration(m_endpoint->d_func()->endpointName)),
-                           QSettings::IniFormat);
-    }
-
-    // That's all, folks!
-    setFinished();
-}
-
 void HTTPEndpointPrivate::connectToEndpoint()
 {
     QUrl infoEndpoint = endpoint;
-    infoEndpoint.setPath(endpoint.path() + QLatin1String("/info"));
+    infoEndpoint.setPath(QString("%1/devices/%2").arg(endpoint.path()).arg(QString::fromLatin1(hardwareId)));
     QNetworkRequest req(infoEndpoint);
     req.setSslConfiguration(sslConfiguration);
-    req.setRawHeader("Authorization", agentKey);
-    req.setRawHeader("X-Astarte-Transport-Provider", "Hemera");
+    req.setRawHeader("Authorization", "Bearer " + credentialsSecretProvider->credentialsSecret());
+    req.setRawHeader("X-Astarte-Transport-Provider", "Astarte Device SDK Qt4");
     req.setRawHeader("X-Astarte-Transport-Version", QString("%1.%2.%3")
                                                      .arg(Utils::majorVersion())
                                                      .arg(Utils::minorVersion())
@@ -237,11 +77,7 @@ void HTTPEndpointPrivate::onConnectionEstablished()
     QNetworkReply *reply = qobject_cast<QNetworkReply*>(q->sender());
 
     if (reply->error() != QNetworkReply::NoError) {
-        int retryInterval = Utils::randomizedInterval(RETRY_INTERVAL, 1.0);
-        qWarning() << "Error while connecting! Retrying in " << (retryInterval / 1000) << " seconds. error: " << reply->error();
-
-        // We never give up. If we couldn't connect, we reschedule this in 15 seconds.
-        QTimer::singleShot(retryInterval, q, SLOT(connectToEndpoint()));
+        retryConnectToEndpointLater();
         reply->deleteLater();
         return;
     }
@@ -250,17 +86,29 @@ void HTTPEndpointPrivate::onConnectionEstablished()
     doc.Parse(reply->readAll());
     reply->deleteLater();
     if (!doc.IsObject()) {
+        retryConnectToEndpointLater();
         return;
     }
 
     qDebug() << "Connected! ";
 
-    endpointVersion = doc["version"].GetString();
+    endpointVersion = doc["data"]["version"].GetString();
+
+    if (!doc["data"]["protocols"].HasMember("astarte_mqtt_v1") || !doc["data"]["protocols"]["astarte_mqtt_v1"].HasMember("broker_url")) {
+        qWarning() << "No broker_url or astarte_mqtt_v1 protocol available from info endpoint";
+        retryConnectToEndpointLater();
+        return;
+    }
+
+    QString status = doc["data"]["status"].GetString();
+
+    qDebug() << "Device status is " << status;
 
     // Get configuration
     QSettings settings(QString("%1/mqtt_broker.conf").arg(q->pathToAstarteEndpointConfiguration(endpointName)),
                        QSettings::IniFormat);
-    mqttBroker = QUrl::fromUserInput(doc["url"].GetString());
+    mqttBroker = QUrl::fromUserInput(doc["data"]["protocols"]["astarte_mqtt_v1"]["broker_url"].GetString());
+    qDebug() << "Broker url is " << mqttBroker;
 
     if (Crypto::instance()->isReady() || Crypto::instance()->hasInitError()) {
         processCryptoStatus();
@@ -268,6 +116,37 @@ void HTTPEndpointPrivate::onConnectionEstablished()
         Crypto::instance()->setHardwareId(hardwareId);
         QObject::connect(Crypto::instance()->init(), SIGNAL(finished(Hemera::Operation*)), q, SLOT(processCryptoStatus()));
     }
+}
+
+void HTTPEndpointPrivate::retryConnectToEndpointLater()
+{
+    Q_Q(HTTPEndpoint);
+    int retryInterval = Utils::randomizedInterval(RETRY_INTERVAL, 1.0);
+    qWarning() << "Error while connecting to info endpoint, retrying in " << (retryInterval / 1000) << " seconds";
+    QTimer::singleShot(retryInterval, q, SLOT(connectToEndpoint()));
+}
+
+void HTTPEndpointPrivate::ensureCredentialsSecret()
+{
+    Q_Q(HTTPEndpoint);
+    DefaultCredentialsSecretProvider *provider = new DefaultCredentialsSecretProvider(q);
+    provider->setAgentKey(agentKey);
+    provider->setEndpointConfigurationPath(q->pathToAstarteEndpointConfiguration(endpointName));
+    provider->setEndpointUrl(endpoint);
+    provider->setHardwareId(hardwareId);
+    provider->setNAM(nam);
+    provider->setSslConfiguration(sslConfiguration);
+    credentialsSecretProvider = provider;
+
+    QObject::connect(credentialsSecretProvider, SIGNAL(credentialsSecretReady(QByteArray)), q, SLOT(onCredentialsSecretReady()));
+
+    credentialsSecretProvider->ensureCredentialsSecret();
+}
+
+void HTTPEndpointPrivate::onCredentialsSecretReady()
+{
+    qDebug() << "Credentials secret is: " << credentialsSecretProvider->credentialsSecret();
+    connectToEndpoint();
 }
 
 void HTTPEndpointPrivate::processCryptoStatus()
@@ -338,8 +217,7 @@ void HTTPEndpoint::initImpl()
         }
     }
 
-    // Let's connect to our endpoint, shall we?
-    d->connectToEndpoint();
+    d->ensureCredentialsSecret();
 
     connect(d->nam, SIGNAL(sslErrors(QNetworkReply*,QList<QSslError>)), this, SLOT(ignoreSslErrors(QNetworkReply*,QList<QSslError>)));
 }
@@ -367,39 +245,27 @@ QString HTTPEndpoint::pathToAstarteEndpointConfiguration(const QString &endpoint
 QNetworkReply *HTTPEndpoint::sendRequest(const QString& relativeEndpoint, const QByteArray& payload, Crypto::AuthenticationDomain authenticationDomain)
 {
     Q_D(const HTTPEndpoint);
-    // Build the endpoint
-    QUrl target = d->endpoint;
-    target.setPath(d->endpoint.path() + relativeEndpoint);
-
-    QNetworkRequest req(target);
-    req.setHeader(QNetworkRequest::ContentTypeHeader, QLatin1String("application/json"));
-    req.setSslConfiguration(d->sslConfiguration);
-
-    qWarning() << "La richiesta lo zio" << relativeEndpoint << payload << authenticationDomain;
-    // Authentication?
+    QNetworkRequest req;
     if (authenticationDomain == Crypto::DeviceAuthenticationDomain) {
-        // FIXME: This should be done using Global configuration!!
-        QSettings settings(QString("%1/endpoint_crypto.conf").arg(pathToAstarteEndpointConfiguration(d->endpointName)),
-                           QSettings::IniFormat);
-        req.setRawHeader("X-API-Key", settings.value(QLatin1String("apiKey")).toString().toLatin1());
-        req.setRawHeader("X-Hardware-ID", d->hardwareId);
-        req.setRawHeader("X-Astarte-Transport-Provider", "Hemera");
+        // Build the endpoint
+        QUrl target = d->endpoint;
+        target.setPath(QString("%1/devices/%2%3").arg(d->endpoint.path()).arg(QString::fromLatin1(d->hardwareId)).arg(relativeEndpoint));
+        req.setUrl(target);
+
+        req.setHeader(QNetworkRequest::ContentTypeHeader, QString("application/json"));
+        req.setSslConfiguration(d->sslConfiguration);
+
+        qDebug() << "Request is: " << relativeEndpoint << payload << authenticationDomain;
+
+        req.setRawHeader("Authorization", "Bearer " + d->credentialsSecretProvider->credentialsSecret());
+        req.setRawHeader("X-Astarte-Transport-Provider", "Astarte Device SDK Qt4");
         req.setRawHeader("X-Astarte-Transport-Version", QString("%1.%2.%3")
                                                      .arg(Utils::majorVersion())
                                                      .arg(Utils::minorVersion())
                                                      .arg(Utils::releaseVersion())
                                                      .toLatin1());
-        qWarning() << "Lozio";
-        qWarning() << "Setting X-API-Key:" << settings.value(QLatin1String("apiKey")).toString();
-    } else if (authenticationDomain == Crypto::CustomerAuthenticationDomain) {
-        qWarning() << "Authorization lo zio";
-        req.setRawHeader("Authorization", d->agentKey);
-        req.setRawHeader("X-Astarte-Transport-Provider", "Hemera");
-        req.setRawHeader("X-Astarte-Transport-Version", QString("%1.%2.%3")
-                                                     .arg(Utils::majorVersion())
-                                                     .arg(Utils::minorVersion())
-                                                     .arg(Utils::releaseVersion())
-                                                     .toLatin1());
+    } else {
+        qWarning() << "Only DeviceAuthenticationDomain can be used in astartehttpendpoint";
     }
 
     return d->nam->post(req, payload);
