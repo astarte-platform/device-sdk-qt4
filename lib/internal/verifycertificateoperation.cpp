@@ -74,7 +74,10 @@ void VerifyCertificateOperation::startImpl()
 
 void VerifyCertificateOperation::verify()
 {
-    QNetworkReply *r = m_endpoint->sendRequest(QLatin1String("/verifyCertificate"), m_certificate, Crypto::DeviceAuthenticationDomain);
+    QString jsonDocument = QString("{\"data\":{\"client_crt\":\"%1\"}}").arg(QString::fromLatin1(m_certificate));
+
+    QNetworkReply *r = m_endpoint->sendRequest(QString("/protocols/astarte_mqtt_v1/credentials/verify"),
+                                               jsonDocument.toUtf8(), Crypto::DeviceAuthenticationDomain);
 
     connect(r, SIGNAL(finished()), this, SLOT(onReplyFinished()));
 }
@@ -101,9 +104,9 @@ void VerifyCertificateOperation::onReplyFinished()
             return;
         }
 
-        // TODO: handle timestamp field
-        if (doc["valid"].GetBool()) {
-            qDebug() << "Valid certificate";
+        QString timestamp = doc["data"]["timestamp"].GetString();
+        if (doc["data"]["valid"].GetBool()) {
+            qDebug() << "Valid certificate, until" << doc["data"]["until"].GetString();
             setFinished();
             return;
         } else {

@@ -38,7 +38,7 @@ inline qreal randomizedInterval(qreal minimumInterval, qreal delayCoefficient)
 }
 
 inline int majorVersion() { return 0; }
-inline int minorVersion() { return 8; }
+inline int minorVersion() { return 9; }
 inline int releaseVersion() { return 0; }
 
 inline bool verifyPathMatch(const QByteArrayList path1, const QByteArrayList path2) {

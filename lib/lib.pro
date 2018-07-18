@@ -36,6 +36,9 @@ SOURCES += \
     internal/crypto.cpp \
     utils/hemeraoperation.cpp \
     utils/hemeracommonoperations.cpp \
+    internal/astartepairoperation.cpp \
+    internal/credentialssecretprovider.cpp \
+    internal/defaultcredentialssecretprovider.cpp \
     internal/verifycertificateoperation.cpp \
     internal/endpoint.cpp \
     internal/httpendpoint.cpp \
@@ -66,7 +69,10 @@ HEADERS += \
     utils/hemeraoperation_p.h \
     internal/crypto_p.h \
     utils/hemeracommonoperations.h \
+    internal/astartepairoperation.h \
     internal/verifycertificateoperation.h \
+    internal/credentialssecretprovider.h \
+    internal/defaultcredentialssecretprovider.h \
     internal/endpoint.h \
     internal/httpendpoint.h \
     internal/endpoint_p.h \

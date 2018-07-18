@@ -41,6 +41,7 @@ class HTTPEndpoint : public Endpoint
     Q_PRIVATE_SLOT(d_func(), void connectToEndpoint())
     Q_PRIVATE_SLOT(d_func(), void onConnectionEstablished())
     Q_PRIVATE_SLOT(d_func(), void processCryptoStatus())
+    Q_PRIVATE_SLOT(d_func(), void onCredentialsSecretReady())
 
     friend class PairOperation;
 

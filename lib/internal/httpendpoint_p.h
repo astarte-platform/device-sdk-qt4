@@ -27,10 +27,15 @@
 
 namespace Astarte {
 
+class CredentialsSecretProvider;
+
 class HTTPEndpointPrivate : public EndpointPrivate {
 
 public:
-    HTTPEndpointPrivate(HTTPEndpoint *q) : EndpointPrivate(q) {}
+    HTTPEndpointPrivate(HTTPEndpoint *q)
+        : EndpointPrivate(q)
+        , credentialsSecretProvider(0)
+    {}
 
     Q_DECLARE_PUBLIC(HTTPEndpoint)
 
@@ -47,35 +52,14 @@ public:
     bool ignoreSslErrors;
 
     QSslConfiguration sslConfiguration;
+    CredentialsSecretProvider *credentialsSecretProvider;
 
     void connectToEndpoint();
     void onConnectionEstablished();
     void processCryptoStatus();
-};
-
-
-class PairOperation : public Hemera::Operation
-{
-    Q_OBJECT
-    Q_DISABLE_COPY(PairOperation)
-
-public:
-    explicit PairOperation(HTTPEndpoint *parent);
-    virtual ~PairOperation();
-
-protected:
-    virtual void startImpl();
-
-private Q_SLOTS:
-    void onGenerationFinished(Hemera::Operation*);
-    void initiatePairing();
-    void onDeviceIDPayloadFinished();
-    void performFakeAgentPairing();
-    void performPairing();
-    void onPairingReply();
-
-private:
-    HTTPEndpoint *m_endpoint;
+    void ensureCredentialsSecret();
+    void retryConnectToEndpointLater();
+    void onCredentialsSecretReady();
 };
 
 }
